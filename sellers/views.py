@@ -2,8 +2,10 @@ import random
 from datetime import timedelta
 from django.contrib.auth.models import User
 from django.contrib.auth import authenticate
-from django.core.mail import EmailMessage
+from django.core.mail import EmailMultiAlternatives
+from django.template.loader import render_to_string
 from django.utils import timezone
+from django.conf import settings
 
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import AllowAny, IsAuthenticated, IsAdminUser
@@ -15,28 +17,28 @@ from .models import SellerProfile, Document, EmailOTP, PasswordResetOTP
 from .serializers import SellerProfileSerializer, DocumentSerializer
 
 # ------------------------------
-# HELPER FUNCTIONS
+# Helper Functions
 # ------------------------------
 
 def get_tokens_for_user(user):
     refresh = RefreshToken.for_user(user)
-    return {
-        "refresh": str(refresh),
-        "access": str(refresh.access_token),
-    }
-
+    return {"refresh": str(refresh), "access": str(refresh.access_token)}
 
 def generate_otp():
     return str(random.randint(100000, 999999))
 
-
-def send_email_otp(email, otp, subject="OTP Verification"):
-    msg = EmailMessage(
+def send_email_otp(email, otp, subject="OTP Verification", name="User", template="email/otp_email.html"):
+    html_content = render_to_string(template, {"otp": otp, "subject": subject, "name": name})
+    msg = EmailMultiAlternatives(
         subject=subject,
-        body=f"Your OTP is {otp}. It is valid for 10 minutes.",
-        to=[email],
+        body=f"Your OTP is {otp}.",  # plain text fallback
+        from_email=settings.DEFAULT_FROM_EMAIL,
+        to=[email]
     )
-    msg.send()
+    msg.attach_alternative(html_content, "text/html")
+    msg.send(fail_silently=False)
+
+
 
 
 # ------------------------------
@@ -49,24 +51,17 @@ def signup(request):
     email = request.data.get("email")
     phone = request.data.get("mobile")
     password = request.data.get("password")
-    factory_name = request.data.get("factory_name", "Unnamed Factory")
     owner_name = request.data.get("owner_name", "")
+    factory_name = request.data.get("factory_name", "Unnamed Factory")
 
     if not email or not phone or not password:
         return Response({"detail": "Email, mobile, and password are required"}, status=400)
-
     if User.objects.filter(username=email).exists():
         return Response({"detail": "User already exists"}, status=400)
 
     user = User.objects.create_user(
-        username=email,
-        email=email,
-        password=password,
-        first_name=owner_name,
-        is_active=False,
+        username=email, email=email, password=password, first_name=owner_name, is_active=False
     )
-
-    # 👇 Default status is now "new" (from model default)
     profile = SellerProfile.objects.create(
         user=user,
         factory_name=factory_name,
@@ -76,10 +71,9 @@ def signup(request):
         address=request.data.get("address", ""),
     )
 
-    # Generate OTP and send email
     otp = generate_otp()
-    EmailOTP.objects.create(email=email, otp=otp)
-    send_email_otp(email, otp)
+    EmailOTP.objects.create(email=email, otp=otp, expires_at=timezone.now() + timedelta(minutes=10))
+    send_email_otp(email, otp, name=owner_name)
 
     return Response({"userId": profile.id, "detail": "OTP sent to email"}, status=201)
 
@@ -207,7 +201,6 @@ def verify_otp(request):
     else:
         return Response({"detail": "Invalid or expired OTP"}, status=400)
 
-
 # ------------------------------
 # FORGOT PASSWORD
 # ------------------------------
@@ -219,7 +212,7 @@ def forgot_password(request):
     if not email:
         return Response({"detail": "Email is required"}, status=400)
     try:
-        User.objects.get(username=email)
+        user = User.objects.get(username=email)
     except User.DoesNotExist:
         return Response({"detail": "User not found"}, status=404)
 
@@ -228,9 +221,13 @@ def forgot_password(request):
         email=email,
         defaults={"otp": otp, "expires_at": timezone.now() + timedelta(minutes=10)},
     )
-    send_email_otp(email, otp, subject="Password Reset OTP")
+    send_email_otp(email, otp, subject="Password Reset OTP", name=user.first_name or email, template="email/password_reset_email.html")
     return Response({"detail": "OTP sent to email"}, status=200)
 
+
+# ------------------------------
+# VERIFY RESET OTP
+# ------------------------------
 
 @api_view(["POST"])
 @permission_classes([AllowAny])
