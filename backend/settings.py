@@ -140,8 +140,9 @@ CLOUDINARY_STORAGE = {
 CORS_ALLOWED_ORIGINS = [
     "http://localhost:3000",
     "http://127.0.0.1:3000",
-    os.getenv("FRONTEND_URL", ""),   
-    "https://seller-backend.onrender.com",
+    os.getenv("FRONTEND_URL", ""),  
+    "sellerapp-backend-20xn.onrender.com",
+ 
 ]
 
 CORS_ALLOW_CREDENTIALS = True
