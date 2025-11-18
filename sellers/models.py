@@ -2,6 +2,7 @@ from django.db import models
 from django.utils import timezone
 from datetime import timedelta
 from django.contrib.auth.models import User
+from cloudinary_storage.storage import MediaCloudinaryStorage
 
 # 💡 Added "new" as the default status for newly registered sellers
 VERIFICATION_CHOICES = [
@@ -27,11 +28,15 @@ class SellerProfile(models.Model):
     def __str__(self):
         return f"{self.factory_name} ({self.user.username})"
 
+def seller_doc_path(instance, filename):
+    label = instance.doc_type.lower().replace(" ", "_")
+    return f"seller_docs/{instance.seller.id}/{label}_{filename}"
+
 
 class Document(models.Model):
     seller = models.ForeignKey(SellerProfile, on_delete=models.CASCADE, related_name="documents")
     doc_type = models.CharField(max_length=128)
-    file = models.FileField(upload_to="seller_docs/")
+    file = models.FileField(upload_to=seller_doc_path, storage=MediaCloudinaryStorage())
     uploaded_at = models.DateTimeField(auto_now_add=True)
 
     def __str__(self):

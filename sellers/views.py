@@ -2,23 +2,24 @@ import random
 from datetime import timedelta
 from django.contrib.auth.models import User
 from django.contrib.auth import authenticate
-from django.core.mail import EmailMultiAlternatives
 from django.template.loader import render_to_string
 from django.utils import timezone
 from django.conf import settings
 
-from rest_framework.decorators import api_view, permission_classes
+from rest_framework.parsers import MultiPartParser, FormParser
+from rest_framework.decorators import api_view, parser_classes, permission_classes
 from rest_framework.permissions import AllowAny, IsAuthenticated, IsAdminUser
 from rest_framework.response import Response
-from rest_framework.parsers import MultiPartParser, FormParser
 from rest_framework_simplejwt.tokens import RefreshToken
 
 from .models import SellerProfile, Document, EmailOTP, PasswordResetOTP
 from .serializers import SellerProfileSerializer, DocumentSerializer
+from .utils.email_service import send_acs_email
 
-# ------------------------------
+
+# ======================================================================
 # Helper Functions
-# ------------------------------
+# ======================================================================
 
 def get_tokens_for_user(user):
     refresh = RefreshToken.for_user(user)
@@ -29,21 +30,19 @@ def generate_otp():
 
 def send_email_otp(email, otp, subject="OTP Verification", name="User", template="email/otp_email.html"):
     html_content = render_to_string(template, {"otp": otp, "subject": subject, "name": name})
-    msg = EmailMultiAlternatives(
+    plain_text = f"Your OTP is {otp}."
+
+    send_acs_email(
+        to_email=email,
         subject=subject,
-        body=f"Your OTP is {otp}.",  # plain text fallback
-        from_email=settings.DEFAULT_FROM_EMAIL,
-        to=[email]
+        html_content=html_content,
+        plain_text=plain_text
     )
-    msg.attach_alternative(html_content, "text/html")
-    msg.send(fail_silently=False)
 
 
-
-
-# ------------------------------
+# ======================================================================
 # SIGNUP
-# ------------------------------
+# ======================================================================
 
 @api_view(["POST"])
 @permission_classes([AllowAny])
@@ -56,19 +55,21 @@ def signup(request):
 
     if not email or not phone or not password:
         return Response({"detail": "Email, mobile, and password are required"}, status=400)
+
     if User.objects.filter(username=email).exists():
         return Response({"detail": "User already exists"}, status=400)
 
     user = User.objects.create_user(
         username=email, email=email, password=password, first_name=owner_name, is_active=False
     )
+
     profile = SellerProfile.objects.create(
         user=user,
         factory_name=factory_name,
         mobile=phone,
         gstin=request.data.get("gstin", ""),
         iec=request.data.get("iec", ""),
-        address=request.data.get("address", ""),
+        address=request.data.get("address", "")
     )
 
     otp = generate_otp()
@@ -78,9 +79,9 @@ def signup(request):
     return Response({"userId": profile.id, "detail": "OTP sent to email"}, status=201)
 
 
-# ------------------------------
+# ======================================================================
 # LOGIN
-# ------------------------------
+# ======================================================================
 
 @api_view(["POST"])
 @permission_classes([AllowAny])
@@ -102,7 +103,6 @@ def login(request):
 
     tokens = get_tokens_for_user(user)
 
-    # Include status in login response for frontend redirect
     return Response({
         "userId": profile.id,
         "status": profile.status,
@@ -110,10 +110,9 @@ def login(request):
     })
 
 
-# ------------------------------
+# ======================================================================
 # USER PROFILE UPDATE
-# ------------------------------
-
+# ======================================================================
 
 @api_view(["PATCH"])
 @permission_classes([IsAuthenticated])
@@ -126,14 +125,13 @@ def update_seller_profile(request, user_id):
     serializer = SellerProfileSerializer(profile, data=request.data, partial=True)
     if serializer.is_valid():
         serializer.save()
-        return Response(serializer.data, status=200)
+        return Response(serializer.data)
     return Response(serializer.errors, status=400)
 
 
-
-# ------------------------------
-# USER ME ENDPOINT
-# ------------------------------
+# ======================================================================
+# USER ME
+# ======================================================================
 
 @api_view(["GET"])
 @permission_classes([IsAuthenticated])
@@ -155,9 +153,9 @@ def user_me(request):
     })
 
 
-# ------------------------------
-# SEND & VERIFY OTP
-# ------------------------------
+# ======================================================================
+# SEND OTP
+# ======================================================================
 
 @api_view(["POST"])
 @permission_classes([AllowAny])
@@ -171,15 +169,21 @@ def send_otp(request):
         email=email,
         defaults={"otp": otp_code, "expires_at": timezone.now() + timedelta(minutes=10)},
     )
-    send_email_otp(email, otp_code)
-    return Response({"detail": "OTP sent to email"}, status=200)
 
+    send_email_otp(email, otp_code)
+    return Response({"detail": "OTP sent to email"})
+
+
+# ======================================================================
+# VERIFY OTP
+# ======================================================================
 
 @api_view(["POST"])
 @permission_classes([AllowAny])
 def verify_otp(request):
     email = request.data.get("email")
     otp_input = request.data.get("otp")
+
     if not email or not otp_input:
         return Response({"detail": "Email and OTP are required"}, status=400)
 
@@ -197,20 +201,23 @@ def verify_otp(request):
             return Response({"detail": "User not found"}, status=404)
 
         tokens = get_tokens_for_user(user)
-        return Response({"detail": "OTP verified", "tokens": tokens}, status=200)
-    else:
-        return Response({"detail": "Invalid or expired OTP"}, status=400)
+        return Response({"detail": "OTP verified", "tokens": tokens})
 
-# ------------------------------
+    return Response({"detail": "Invalid or expired OTP"}, status=400)
+
+
+# ======================================================================
 # FORGOT PASSWORD
-# ------------------------------
+# ======================================================================
 
 @api_view(["POST"])
 @permission_classes([AllowAny])
 def forgot_password(request):
     email = request.data.get("email")
+
     if not email:
         return Response({"detail": "Email is required"}, status=400)
+
     try:
         user = User.objects.get(username=email)
     except User.DoesNotExist:
@@ -221,19 +228,28 @@ def forgot_password(request):
         email=email,
         defaults={"otp": otp, "expires_at": timezone.now() + timedelta(minutes=10)},
     )
-    send_email_otp(email, otp, subject="Password Reset OTP", name=user.first_name or email, template="email/password_reset_email.html")
-    return Response({"detail": "OTP sent to email"}, status=200)
+
+    send_email_otp(
+        email,
+        otp,
+        subject="Password Reset OTP",
+        name=user.first_name or email,
+        template="email/password_reset_email.html"
+    )
+
+    return Response({"detail": "OTP sent to email"})
 
 
-# ------------------------------
+# ======================================================================
 # VERIFY RESET OTP
-# ------------------------------
+# ======================================================================
 
 @api_view(["POST"])
 @permission_classes([AllowAny])
 def verify_reset_otp(request):
     email = request.data.get("email")
     otp_input = request.data.get("otp")
+
     if not email or not otp_input:
         return Response({"detail": "Email and OTP are required"}, status=400)
 
@@ -243,10 +259,14 @@ def verify_reset_otp(request):
         return Response({"detail": "No OTP found"}, status=404)
 
     if otp_obj.is_valid(otp_input):
-        return Response({"detail": "OTP verified"}, status=200)
-    else:
-        return Response({"detail": "Invalid or expired OTP"}, status=400)
+        return Response({"detail": "OTP verified"})
 
+    return Response({"detail": "Invalid or expired OTP"}, status=400)
+
+
+# ======================================================================
+# RESET PASSWORD
+# ======================================================================
 
 @api_view(["POST"])
 @permission_classes([AllowAny])
@@ -270,46 +290,44 @@ def reset_password(request):
         user = User.objects.get(username=email)
         user.set_password(new_password)
         user.save()
-        return Response({"detail": "Password reset successful"}, status=200)
+        return Response({"detail": "Password reset successful"})
     except User.DoesNotExist:
         return Response({"detail": "User not found"}, status=404)
 
 
-# ------------------------------
+# ======================================================================
 # UPLOAD DOCUMENT
-# ------------------------------
+# ======================================================================
 
 @api_view(["POST"])
+@parser_classes([MultiPartParser, FormParser])
 @permission_classes([IsAuthenticated])
 def upload_doc(request):
-    parser_classes = (MultiPartParser, FormParser)
-
     try:
         profile = request.user.seller_profile
     except SellerProfile.DoesNotExist:
         return Response({"detail": "Seller profile not found"}, status=404)
 
-    # ✅ If seller was previously rejected or new, reset to pending
     if profile.status.lower() in ["rejected", "new"]:
         profile.status = "pending"
         profile.admin_comment = ""
         profile.save()
 
-    files = []
+    uploaded_docs = []
     for key, file in request.FILES.items():
         doc = Document.objects.create(seller=profile, doc_type=key, file=file)
-        files.append(DocumentSerializer(doc).data)
+        uploaded_docs.append(DocumentSerializer(doc).data)
 
     return Response({
         "message": "Documents uploaded successfully",
         "status": profile.status,
-        "documents": files
+        "documents": uploaded_docs
     })
 
 
-# ------------------------------
-# GET PROFILE STATUS
-# ------------------------------
+# ======================================================================
+# STATUS VIEW FOR FRONTEND
+# ======================================================================
 
 @api_view(["GET"])
 @permission_classes([AllowAny])
@@ -320,6 +338,7 @@ def status_view(request, user_id):
         return Response({"detail": "Not found"}, status=404)
 
     data = SellerProfileSerializer(profile).data
+
     return Response({
         "status": profile.status,
         "admin_comment": profile.admin_comment,
@@ -327,9 +346,9 @@ def status_view(request, user_id):
     })
 
 
-# ------------------------------
-# UPDATE PROFILE STATUS
-# ------------------------------
+# ======================================================================
+# UPDATE STATUS
+# ======================================================================
 
 @api_view(["PATCH"])
 @permission_classes([IsAuthenticated])
@@ -339,14 +358,15 @@ def update_status(request):
         new_status = request.data.get("status", "pending")
         profile.status = new_status
         profile.save()
+
         return Response({"message": f"Status updated to {profile.status}"})
     except SellerProfile.DoesNotExist:
         return Response({"detail": "Seller profile not found"}, status=404)
 
 
-# ------------------------------
+# ======================================================================
 # DELETE USER
-# ------------------------------
+# ======================================================================
 
 @api_view(["DELETE"])
 @permission_classes([IsAdminUser])
@@ -357,12 +377,12 @@ def delete_user(request, user_id):
         return Response({"detail": "User not found"}, status=404)
 
     user.delete()
-    return Response({"message": f"User {user_id} deleted successfully."})
+    return Response({"message": f"User {user_id} deleted successfully"})
 
 
-# ------------------------------
+# ======================================================================
 # ADMIN APPROVE / REJECT SELLER
-# ------------------------------
+# ======================================================================
 
 @api_view(["POST"])
 @permission_classes([IsAdminUser])
