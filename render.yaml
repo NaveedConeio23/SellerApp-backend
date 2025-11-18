@@ -8,7 +8,7 @@ services:
     envVars:
       DJANGO_SECRET_KEY: ${DJANGO_SECRET_KEY}
       DJANGO_DEBUG: False
-      DJANGO_ALLOWED_HOSTS: seller-backend.onrender.com
+      DJANGO_ALLOWED_HOSTS: sellerapp-backend-lzm3.onrender.com,localhost,127.0.0.1
 
       # POSTGRES (Neon)
       POSTGRES_DB: ${POSTGRES_DB}
