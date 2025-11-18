@@ -4,16 +4,26 @@ services:
     env: python
     region: singapore
     buildCommand: "pip install -r requirements.txt"
-    startCommand: "gunicorn backend.wsgi:application --timeout 120"
+    startCommand: "python manage.py migrate --noinput && python manage.py collectstatic --noinput && gunicorn backend.wsgi:application --timeout 120"
     envVars:
       DJANGO_SECRET_KEY: ${DJANGO_SECRET_KEY}
       DJANGO_DEBUG: False
       DJANGO_ALLOWED_HOSTS: seller-backend.onrender.com
+
+      # POSTGRES (Neon)
       POSTGRES_DB: ${POSTGRES_DB}
       POSTGRES_USER: ${POSTGRES_USER}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
       POSTGRES_HOST: ${POSTGRES_HOST}
       POSTGRES_PORT: ${POSTGRES_PORT}
       POSTGRES_SSL_REQUIRE: "True"
+
+      # Cloudinary
       CLOUDINARY_URL: ${CLOUDINARY_URL}
-      FRONTEND_URL: https://your-frontend.vercel.app
+
+      # Frontend URL (Your Vercel app)
+      FRONTEND_URL: https://coneio-sellerapp.vercel.app
+
+      # Azure Communication Service Email
+      CONNECTION_STRING_EMAIL: ${CONNECTION_STRING_EMAIL}
+      AZURE_SENDER_ADDRESS: ${AZURE_SENDER_ADDRESS}
